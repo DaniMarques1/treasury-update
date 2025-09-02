@@ -1,0 +1,29 @@
+services:
+  run:
+    build: .
+    container_name: dataBuild
+    command: python -u run.py
+    env_file: .env
+    volumes:
+      - .:/app
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  listen:
+    build: .
+    container_name: listenBlocks
+    command: python -u listenNewBlocks.py
+    env_file: .env
+    volumes:
+      - .:/app
+    restart: always
+    depends_on:
+      - run
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
