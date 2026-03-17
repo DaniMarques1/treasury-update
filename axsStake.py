@@ -1,5 +1,6 @@
 import os
 import json
+import time  # Importado para controlar o intervalo
 from datetime import datetime, timezone
 from web3 import Web3
 from web3.middleware import geth_poa_middleware
@@ -14,6 +15,9 @@ RPC_URL = "https://api.roninchain.com/rpc"
 TOKEN_ADDRESS = "0x97a9107C1793bc407d6f527b77e7fff4d812bece"
 STAKING_POOL = "0x05b0bb3C1c320b280501b86706c3551995bc8571"
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Constante de tempo (59 min e 55 seg)
+INTERVALO_SEGUNDOS = (59 * 60) + 55
 
 # Inicialização Web3
 w3 = Web3(Web3.HTTPProvider(RPC_URL))
@@ -30,18 +34,18 @@ def save_to_mongo(data_dict):
     """Conecta ao MongoDB e insere o documento"""
     try:
         client = MongoClient(DATABASE_URL)
-        # Acessa o banco 'data' e a coleção 'stakingAXS'
         db = client['data']
         collection = db['stakingAXS']
-
         result = collection.insert_one(data_dict)
+        client.close()  # Boa prática fechar a conexão
         return result.inserted_id
     except Exception as e:
         print(f"Erro ao salvar no MongoDB: {e}")
         return None
 
 
-def main():
+def coletar_dados():
+    """Executa a lógica de coleta e salvamento"""
     if not w3.is_connected():
         print(json.dumps({"error": "Falha na conexão RPC"}))
         return
@@ -50,13 +54,10 @@ def main():
 
     try:
         now_utc = datetime.now(timezone.utc)
-
-        # Consulta de dados no Blockchain
         decimals = contract.functions.decimals().call()
         balance_raw = contract.functions.balanceOf(Web3.to_checksum_address(STAKING_POOL)).call()
         balance_human = float(balance_raw / (10 ** decimals))
 
-        # Estrutura do Documento
         document = {
             "date": now_utc.strftime("%Y-%m-%d"),
             "hour": now_utc.strftime("%H:%M:%S"),
@@ -64,20 +65,18 @@ def main():
             "axs_total": balance_human
         }
 
-        # 1. Print do JSON (para seu log/terminal)
-        print(json.dumps(document, indent=4))
-
-        # 2. Salva no MongoDB
-        inserted_id = save_to_mongo(document.copy())  # .copy() para evitar problemas de mutação
-
-        if inserted_id:
-            # Opcional: print discreto de sucesso
-            # print(f"Inserido com ID: {inserted_id}")
-            pass
+        print(f"[{now_utc.strftime('%H:%M:%S')}] Dados coletados: {balance_human} AXS")
+        save_to_mongo(document)
 
     except Exception as e:
         print(json.dumps({"error": str(e)}, indent=4))
 
 
 if __name__ == "__main__":
-    main()
+    print(f"Iniciando monitoramento. Intervalo: {INTERVALO_SEGUNDOS} segundos.")
+
+    while True:
+        coletar_dados()
+
+        # Aguarda o tempo definido antes da próxima execução
+        time.sleep(INTERVALO_SEGUNDOS)
