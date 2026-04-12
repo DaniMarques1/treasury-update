@@ -57,3 +57,18 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+# --- Novo serviço adicionado abaixo ---
+  sum_baxs:
+    build: .
+    container_name: sumBAXS
+    command: python -u sumBAXS.py
+    env_file: .env
+    volumes:
+      - .:/app
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
