@@ -42,3 +42,18 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+# --- Novo serviço adicionado abaixo ---
+  sum_axs:
+    build: .
+    container_name: sumAXS
+    command: python -u sumAXS.py
+    env_file: .env
+    volumes:
+      - .:/app
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
