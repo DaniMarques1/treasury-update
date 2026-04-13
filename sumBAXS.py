@@ -13,11 +13,17 @@ TARGET_TOKEN = "0x97a9107c1793bc407d6f527b77e7fff4d812bece".lower()
 
 TYPE_MAP = {
     "0x8264f2c2": "Breeding",
+    "0x6e094ff4": "Ascend",
+    "0xc27b4f9b": "Ascend",
     "0xdb116baf": "Ascend",
+    "0x2d7ab081": "Ascend",
+    "0x2c7fa5d8": "Evolve",
     "0xc7a23520": "Evolve",
+    "0x43afef80": "Atia's Restore",
     "0x8a4c44aa": "Forge",
     "0x34fcd5be": "Forge",
     "0x8aff15ec": "Runes & Charms",
+    "0x95fb7103": "Runes & Charms",
     "0x26196e86": "bAXS Fee"
 }
 
@@ -135,4 +141,4 @@ if __name__ == "__main__":
     try:
         process_and_update()
     except Exception as e:
-        print(f"Erro na execução: {e}")
+        print(f"Erro na execução: {e}")
