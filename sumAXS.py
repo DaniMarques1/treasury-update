@@ -1,6 +1,6 @@
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pymongo import MongoClient, UpdateOne
 from dotenv import load_dotenv
 from decimal import Decimal
@@ -17,8 +17,15 @@ TYPE_MAP = {
 }
 
 
+# Helper para garantir que pegamos sempre a hora atual em UTC
+def get_now_utc():
+    return datetime.now(timezone.utc)
+
+
 def process_and_update():
-    print(f"[{datetime.now()}] Iniciando processamento de dados...")
+    now_utc = get_now_utc()
+    print(f"[{now_utc.strftime('%Y-%m-%d %H:%M:%S')} UTC] Iniciando processamento de dados...")
+
     client = MongoClient(DATABASE_URL)
     db = client['data']
     col_input, col_daily, col_sum = db['dailyData'], db['dailyAXS'], db['sumAXS']
@@ -56,46 +63,15 @@ def process_and_update():
     # Replace total na sumAXS
     sum_doc = {m: float(v) for m, v in grand_totals.items()}
     sum_doc["absolute_total"] = float(sum(grand_totals.values()))
-    sum_doc["last_update"] = datetime.now()  # Opcional: para saber quando rodou a última vez
+    sum_doc["last_update"] = get_now_utc()  # Salva o horário correto em UTC no banco
 
     col_sum.replace_one({"_id": "global_totals"}, sum_doc, upsert=True)
 
-    print(f"[{datetime.now()}] Banco de dados atualizado com sucesso!")
-
-
-def run_scheduler():
-    print("--- Worker de Atualização AXS Iniciado ---")
-
-    # 1. EXECUÇÃO IMEDIATA AO RODAR
-    try:
-        process_and_update()
-    except Exception as e:
-        print(f"Erro na execução inicial: {e}")
-
-    # 2. LOOP DE AGENDAMENTO
-    while True:
-        now = datetime.now()
-        target = now.replace(hour=23, minute=59, second=50, microsecond=0)
-
-        # Se já passou do horário alvo hoje, agenda para o próximo dia
-        if now >= target:
-            target += timedelta(days=1)
-
-        wait_seconds = (target - now).total_seconds()
-
-        print(f"Aguardando próxima atualização programada em: {target.strftime('%d/%m/%Y %H:%M:%S')}")
-        print(f"Tempo de espera: {timedelta(seconds=int(wait_seconds))}")
-
-        time.sleep(wait_seconds)
-
-        try:
-            process_and_update()
-        except Exception as e:
-            print(f"Erro na execução agendada: {e}")
-
-        # Evita re-disparo imediato no mesmo segundo
-        time.sleep(5)
+    print(f"[{get_now_utc().strftime('%Y-%m-%d %H:%M:%S')} UTC] Banco de dados atualizado com sucesso!")
 
 
 if __name__ == "__main__":
-    run_scheduler()
+    try:
+        process_and_update()
+    except Exception as e:
+        print(f"Erro na execução: {e}")

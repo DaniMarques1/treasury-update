@@ -1,6 +1,6 @@
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pymongo import MongoClient, UpdateOne
 from dotenv import load_dotenv
 from decimal import Decimal
@@ -8,9 +8,8 @@ from decimal import Decimal
 load_dotenv()
 DATABASE_URL = os.getenv('DATABASE_URL')
 
-# Filtros específicos (Normalizados para minúsculo)
 TARGET_FROM = "0xb4c12d442fb0f90eba1fe5c63498aa91c02bc183".lower()
-TARGET_TOKEN = "0x97a9107c1793bc407d6f527b77e7fff4D812bece".lower()
+TARGET_TOKEN = "0x97a9107c1793bc407d6f527b77e7fff4d812bece".lower()
 
 TYPE_MAP = {
     "0x8264f2c2": "Breeding",
@@ -23,8 +22,15 @@ TYPE_MAP = {
 }
 
 
+# Helper para garantir que pegamos sempre a hora atual em UTC
+def get_now_utc():
+    return datetime.now(timezone.utc)
+
+
 def process_and_update():
-    print(f"[{datetime.now()}] 🚀 Iniciando processamento de alta performance...")
+    now_utc = get_now_utc()
+    print(f"[{now_utc.strftime('%Y-%m-%d %H:%M:%S')} UTC] 🚀 Iniciando processamento de alta performance...")
+
     client = MongoClient(DATABASE_URL)
     db = client['data']
 
@@ -32,94 +38,101 @@ def process_and_update():
     col_daily = db['BAXSdaily']
     col_sum = db['BAXSsum']
 
-    # Filtro direto no MongoDB (Utiliza índices se existirem)
+    # 1. Identificar o limite de tempo (Hoje às 00:00:00 UTC)
+    today_midnight = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # 2. Descobrir qual foi o último dia sumarizado no banco
+    last_summary = col_daily.find_one(sort=[("date", -1)])
+
+    if last_summary and "date" in last_summary:
+        last_date_str = last_summary["date"]
+        # Início da busca: Adiciona 1 dia ao último salvo e atrela ao timezone UTC
+        start_date = datetime.strptime(last_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)
+    else:
+        # Fallback: Data inicial setada como UTC
+        start_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
+
+    # Se o dia de início calculado for hoje ou no futuro, não há dias completos pendentes
+    if start_date >= today_midnight:
+        print(
+            f"[{get_now_utc().strftime('%Y-%m-%d %H:%M:%S')} UTC] ⏭️ Nenhum dia completo novo para sumarizar. Último dia processado: {last_summary.get('date')}.")
+        return
+
+    print(
+        f"[{get_now_utc().strftime('%Y-%m-%d %H:%M:%S')} UTC] 🔍 Buscando txns de {start_date.strftime('%Y-%m-%d')} até {(today_midnight - timedelta(days=1)).strftime('%Y-%m-%d')}...")
+
+    # 3. Query com filtro de timestamp
     query = {
         "fromAddress": {"$regex": f"^{TARGET_FROM}$", "$options": "i"},
         "tokenAddress": {"$regex": f"^{TARGET_TOKEN}$", "$options": "i"},
-        "method": {"$in": list(TYPE_MAP.keys())}
+        "method": {"$in": list(TYPE_MAP.keys())},
+        "timestamp": {
+            "$gte": start_date.timestamp(),  # .timestamp() gera o Epoch universal correto
+            "$lt": today_midnight.timestamp()
+        }
     }
 
     axs_daily = {}
-    grand_totals = {method: Decimal(0) for method in set(TYPE_MAP.values())}
-
-    # Buscando apenas o que precisamos
     cursor = col_input.find(query)
-
     count = 0
+
     for tx in cursor:
         count += 1
-        # Converte timestamp para string de data (YYYY-MM-DD)
-        dt_object = datetime.fromtimestamp(tx["timestamp"])
+        # Converte o epoch em datetime garantindo a leitura em UTC
+        dt_object = datetime.fromtimestamp(tx["timestamp"], timezone.utc)
         date_str = dt_object.strftime("%Y-%m-%d")
 
         method_id = tx.get("method")
         category = TYPE_MAP[method_id]
-
-        # Cálculo de valor
         raw_value = tx.get("amount", 0)
+
         try:
-            # Transforma em Decimal para precisão absoluta
             val = Decimal(str(raw_value)) / Decimal(10 ** 18)
 
             if date_str not in axs_daily:
                 axs_daily[date_str] = {m: Decimal(0) for m in set(TYPE_MAP.values())}
 
             axs_daily[date_str][category] += val
-            grand_totals[category] += val
         except Exception as e:
             continue
 
-    print(f"[{datetime.now()}] 📊 Transações processadas: {count}")
+    print(f"[{get_now_utc().strftime('%Y-%m-%d %H:%M:%S')} UTC] 📊 Transações processadas nesta rodada: {count}")
 
-    if not axs_daily:
-        print(f"[{datetime.now()}] ⚠️ Nenhuma transação encontrada com os filtros aplicados.")
-        return
-
-    # Bulk Upsert para BAXSdaily
-    requests = [
-        UpdateOne(
-            {"date": d},
-            {"$set": {m: float(v) for m, v in vals.items()}},
-            upsert=True
-        ) for d, vals in axs_daily.items()
-    ]
-
-    if requests:
+    if axs_daily:
+        # Bulk Upsert para BAXSdaily
+        requests = [
+            UpdateOne(
+                {"date": d},
+                {"$set": {m: float(v) for m, v in vals.items()}},
+                upsert=True
+            ) for d, vals in axs_daily.items()
+        ]
         col_daily.bulk_write(requests)
+        print(f"[{get_now_utc().strftime('%Y-%m-%d %H:%M:%S')} UTC] 💾 {len(requests)} dias salvos em BAXSdaily.")
 
-    # Update Totais Globais
-    sum_doc = {m: float(v) for m, v in grand_totals.items()}
-    sum_doc["absolute_total"] = float(sum(grand_totals.values()))
-    sum_doc["last_update"] = datetime.now()
-    col_sum.replace_one({"_id": "global_totals"}, sum_doc, upsert=True)
+    # 4. Atualizar Totais Globais (Agregação no banco)
+    print(f"[{get_now_utc().strftime('%Y-%m-%d %H:%M:%S')} UTC] 🧮 Recalculando totais globais...")
 
-    print(f"[{datetime.now()}] ✅ Banco de dados BAXS atualizado com sucesso!")
+    unique_methods = set(TYPE_MAP.values())
+    group_stage = {"_id": "global_totals"}
+    for method in unique_methods:
+        group_stage[method] = {"$sum": f"${method}"}
 
+    pipeline = [{"$group": group_stage}]
+    aggr_result = list(col_daily.aggregate(pipeline))
 
-def run_scheduler():
-    print("--- Worker BAXS (Estrutura Plana) Ativo ---")
+    if aggr_result:
+        sum_doc = aggr_result[0]
+        sum_doc["absolute_total"] = sum(sum_doc.get(m, 0) for m in unique_methods)
+        sum_doc["last_update"] = get_now_utc()  # Registra o update global com timezone explícito
 
-    # Execução inicial
-    try:
-        process_and_update()
-    except Exception as e:
-        print(f"Erro: {e}")
+        col_sum.replace_one({"_id": "global_totals"}, sum_doc, upsert=True)
 
-    while True:
-        now = datetime.now()
-        target = now.replace(hour=23, minute=59, second=50, microsecond=0)
-        if now >= target: target += timedelta(days=1)
-
-        wait_seconds = (target - now).total_seconds()
-        print(f"Aguardando próxima atualização em: {target.strftime('%d/%m/%Y %H:%M:%S')}")
-        time.sleep(wait_seconds)
-
-        try:
-            process_and_update()
-        except Exception as e:
-            print(f"Erro na execução: {e}")
-        time.sleep(10)
+    print(f"[{get_now_utc().strftime('%Y-%m-%d %H:%M:%S')} UTC] ✅ Banco de dados BAXS atualizado com sucesso!")
 
 
 if __name__ == "__main__":
-    run_scheduler()
+    try:
+        process_and_update()
+    except Exception as e:
+        print(f"Erro na execução: {e}")
