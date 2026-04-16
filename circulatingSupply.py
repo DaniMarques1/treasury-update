@@ -3,6 +3,7 @@ import requests
 from pymongo import MongoClient
 from datetime import datetime, timezone
 from dotenv import load_dotenv
+import time
 
 # Carrega as variáveis do arquivo .env
 load_dotenv()
@@ -51,4 +52,7 @@ def update_circulating_supply():
 
 
 if __name__ == "__main__":
-    update_circulating_supply()
+    while True:
+        update_circulating_supply()
+        print("⏳ Aguardando 1 hora para próxima execução...")
+        time.sleep(3600)
