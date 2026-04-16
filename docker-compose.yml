@@ -42,4 +42,19 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
+
+    # --- Novo serviço adicionado abaixo ---
+  circulating_supply:
+    build: .
+    container_name: circulatingSupply
+    command: python -u circulatingSupply.py
+    env_file: .env
+    volumes:
+      - .:/app
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
