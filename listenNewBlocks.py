@@ -16,7 +16,8 @@ BATCH_SIZE = 100
 CONFIRMATIONS = 1
 POLL_INTERVAL = 20
 RETRY_DELAY = 10
-CYCLE_DELAY = 60  # wait after finishing a full cycle
+CYCLE_DELAY = 60  # tempo de espera após concluir um ciclo completo
+REQ_DELAY = 0.65  # ~90 req/min (abaixo do limite de 100/min da Ronin)
 
 MONGO_URI = os.getenv("MONGO_URI")
 MONGO_DB = "data"
@@ -30,12 +31,16 @@ TREASURY_SET = set(TREASURY_ADDRESSES)
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 NATIVE_RON_TRANSFER_TOPIC = "0x3d0ce9bfc3ed7d6862dbb28b2dea94561fe714a1b4d019aa8af39730d1ad7c3d"
 
+# Armazena o tempo sugerido pelo cabeçalho retry-after/ratelimit-reset
+LATEST_RETRY_AFTER = 0
+
 
 def response_hook(response, *args, **kwargs):
-    """Logs headers and body when an RPC HTTP call returns a non-2xx status code."""
+    """Intercepta respostas HTTP e extrai o retry-after quando ocorrer 429."""
+    global LATEST_RETRY_AFTER
     if not response.ok:
         print("\n" + "=" * 60)
-        print(f"❌ HTTP Error Encountered: {response.status_code} {response.reason}")
+        print(f"❌ HTTP Error: {response.status_code} {response.reason}")
         print(f"URL: {response.url}")
         print("-" * 60)
         print("Response Headers:")
@@ -44,6 +49,13 @@ def response_hook(response, *args, **kwargs):
         print("-" * 60)
         print(f"Response Body: {response.text}")
         print("=" * 60 + "\n")
+
+        if response.status_code == 429:
+            retry_val = response.headers.get("retry-after") or response.headers.get("ratelimit-reset")
+            try:
+                LATEST_RETRY_AFTER = float(retry_val) if retry_val else 15.0
+            except ValueError:
+                LATEST_RETRY_AFTER = 15.0
 
 
 def safe_selector(input_data) -> str:
@@ -59,19 +71,30 @@ def safe_selector(input_data) -> str:
 
 
 def with_retries(fn, *args, retries=3, delay=5, **kwargs):
-    """Run fn with retries for transient errors (RPC issues, network hiccups)."""
+    """Executa a função respeitando o Retry-After retornado pelo servidor."""
+    global LATEST_RETRY_AFTER
     for attempt in range(1, retries + 1):
         try:
-            return fn(*args, **kwargs)
+            # Pausa preventiva para respeitar o limite de 100 req/min
+            if REQ_DELAY > 0:
+                time.sleep(REQ_DELAY)
+
+            result = fn(*args, **kwargs)
+            LATEST_RETRY_AFTER = 0  # Reseta após sucesso
+            return result
         except Exception as e:
-            print(f"⚠️ Attempt {attempt}/{retries} failed for {fn.__name__}: {e}")
+            wait_time = LATEST_RETRY_AFTER if LATEST_RETRY_AFTER > 0 else delay
+            print(f"⚠️ Tentativa {attempt}/{retries} falhou para {fn.__name__}: {e}")
+            print(f"⏳ Aguardando {wait_time:.1f}s antes de tentar novamente...")
+
+            time.sleep(wait_time)
+            LATEST_RETRY_AFTER = 0
+
             if attempt == retries:
                 raise
-            time.sleep(delay)
 
 
 def process_and_store_transactions():
-    # Setup custom requests session with the response hook
     session = requests.Session()
     session.hooks["response"].append(response_hook)
 
@@ -117,7 +140,7 @@ def process_and_store_transactions():
             total_batches = (total_blocks + BATCH_SIZE - 1) // BATCH_SIZE
 
             for b_idx, batch_start in enumerate(
-                range(start_block, effective_end + 1, BATCH_SIZE), start=1
+                    range(start_block, effective_end + 1, BATCH_SIZE), start=1
             ):
                 batch_end = min(batch_start + BATCH_SIZE - 1, effective_end)
                 print(f"\n--- Batch {batch_start} to {batch_end} ({b_idx}/{total_batches}) ---")
@@ -147,7 +170,7 @@ def process_and_store_transactions():
                         frm = Web3.to_checksum_address("0x" + log["topics"][1].hex()[-40:])
                         to = Web3.to_checksum_address("0x" + log["topics"][2].hex()[-40:])
                         if (frm in TREASURY_SET or to in TREASURY_SET) and not (
-                            frm in TREASURY_SET and to in TREASURY_SET
+                                frm in TREASURY_SET and to in TREASURY_SET
                         ):
                             docs_to_upsert[doc_id] = {"type": "erc20_log", "data": log}
 
