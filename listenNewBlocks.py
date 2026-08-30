@@ -1,5 +1,6 @@
 import os
 import time
+import requests
 from web3 import Web3
 from web3.middleware import geth_poa_middleware
 from pymongo import MongoClient, UpdateOne
@@ -30,6 +31,21 @@ TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523
 NATIVE_RON_TRANSFER_TOPIC = "0x3d0ce9bfc3ed7d6862dbb28b2dea94561fe714a1b4d019aa8af39730d1ad7c3d"
 
 
+def response_hook(response, *args, **kwargs):
+    """Logs headers and body when an RPC HTTP call returns a non-2xx status code."""
+    if not response.ok:
+        print("\n" + "=" * 60)
+        print(f"❌ HTTP Error Encountered: {response.status_code} {response.reason}")
+        print(f"URL: {response.url}")
+        print("-" * 60)
+        print("Response Headers:")
+        for header, value in response.headers.items():
+            print(f"  {header}: {value}")
+        print("-" * 60)
+        print(f"Response Body: {response.text}")
+        print("=" * 60 + "\n")
+
+
 def safe_selector(input_data) -> str:
     if hasattr(input_data, "hex"):
         input_data = input_data.hex()
@@ -55,7 +71,11 @@ def with_retries(fn, *args, retries=3, delay=5, **kwargs):
 
 
 def process_and_store_transactions():
-    w3 = Web3(Web3.HTTPProvider(RONIN_RPC))
+    # Setup custom requests session with the response hook
+    session = requests.Session()
+    session.hooks["response"].append(response_hook)
+
+    w3 = Web3(Web3.HTTPProvider(RONIN_RPC, session=session))
     w3.middleware_onion.inject(geth_poa_middleware, layer=0)
 
     if not w3.is_connected():
@@ -198,13 +218,12 @@ def process_and_store_transactions():
 
                     except Exception as e:
                         print(f"❌ Error processing tx {log['transactionHash'].hex()}: {e}")
-                        # requeue this log for the next batch retry
                         docs_to_upsert[log["transactionHash"].hex()] = item
 
                 if ops:
                     try:
                         collection.bulk_write(ops, ordered=False)
-                        start_block = batch_end + 1  # advance only on success
+                        start_block = batch_end + 1
                     except Exception as e:
                         print(f"❌ Bulk write failed: {e}")
                         print("⚠️ Skipping block increment due to Mongo write errors.")
@@ -215,7 +234,6 @@ def process_and_store_transactions():
         except Exception as e:
             print(f"💥 Fatal error: {e}. Retrying in {RETRY_DELAY}s...")
             time.sleep(RETRY_DELAY)
-
 
 
 if __name__ == "__main__":
