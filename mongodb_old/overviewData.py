@@ -1,12 +1,13 @@
 import os
-from decimal import Decimal
-from datetime import datetime, timedelta, timezone
-from pymongo import MongoClient
-from dotenv import load_dotenv
 import re
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from dotenv import load_dotenv
+from pymongo import MongoClient
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
 
 def parse_date(s: str):
     try:
@@ -14,14 +15,17 @@ def parse_date(s: str):
     except Exception:
         return None
 
+
 def is_date_key(k: str) -> bool:
     return isinstance(k, str) and DATE_RE.match(k) is not None
+
 
 def to_number(val) -> int | float:
     if isinstance(val, int):
         return val
     f = float(val)
     return int(f) if f.is_integer() else f
+
 
 load_dotenv()
 
@@ -58,29 +62,61 @@ fallback_decimals = {
 
 TOKEN_SYMBOLS = sorted(set(token_map.values()))
 
+
 def get_decimals(token_addr: str, token_symbol: str) -> int:
     return int(
         token_decimals.get(token_addr)
         or fallback_decimals.get(token_symbol, 18)
     )
 
-latest_overview = overview_col.find(
-    {"date": {"$type": "string"}}, projection={"date": 1}
-).sort("date", -1).limit(1)
 
-latest_written_date = None
-for d in latest_overview:
-    latest_written_date = parse_date(d.get("date"))
-    break
+def is_doc_all_zeros(doc: dict) -> bool:
+    """Verifica se todos os campos de token estão zerados no documento."""
+    for symbol in TOKEN_SYMBOLS:
+        val = doc.get(symbol, 0)
+        if val > 0:
+            return False
+    return True
+
+
+def find_overview_resume_start_date():
+    cursor = overview_col.find({"date": {"$type": "string"}})
+
+    valid_dates = set()
+    zero_dates = set()
+
+    for doc in cursor:
+        d = parse_date(doc.get("date"))
+        if not d:
+            continue
+
+        if is_doc_all_zeros(doc):
+            zero_dates.add(d)
+        else:
+            valid_dates.add(d)
+
+    # Se existirem dias gravados totalmente zerados, reprocessa a partir do mais antigo
+    if zero_dates:
+        earliest_zero = min(zero_dates)
+        print(f"🔄 Encontrados registros zerados em 'overviewData'. Recomeçando de: {earliest_zero}")
+        return earliest_zero
+
+    # Se todos os dias gravados forem válidos, avança para o dia seguinte ao último
+    if valid_dates:
+        return max(valid_dates) + timedelta(days=1)
+
+    return None
+
 
 utc_today = datetime.now(timezone.utc).date()
 end_date_inclusive = utc_today - timedelta(days=1)
+resume_start_date = find_overview_resume_start_date()
 
-print(f"Latest written date in overviewData: {latest_written_date}")
+print(f"Resume start date for overviewData: {resume_start_date}")
 print(f"Last fully completed UTC day: {end_date_inclusive}")
 
-if latest_written_date is not None and latest_written_date >= end_date_inclusive:
-    print("No new full UTC days to write. Done.")
+if resume_start_date is not None and resume_start_date > end_date_inclusive:
+    print("No new full UTC days to write and no zeroed days found. Done.")
     raise SystemExit(0)
 
 totals_by_date: dict[str, defaultdict[str, Decimal]] = {}
@@ -96,9 +132,14 @@ try:
             if d is None:
                 continue
 
-            if latest_written_date is not None and d <= latest_written_date:
+            # Filtra apenas datas a partir do resume_start_date até ontem (UTC)
+            if resume_start_date is not None and d < resume_start_date:
                 continue
             if d > end_date_inclusive:
+                continue
+
+            # Pula arrays vazios no dailyData
+            if len(value) == 0:
                 continue
 
             if key not in totals_by_date:
@@ -129,7 +170,7 @@ finally:
     cursor.close()
 
 if not totals_by_date:
-    print("Nothing to write (no eligible dates found in dailyData within the window).")
+    print("Nothing to write (no eligible dates with data found in dailyData within the window).")
     raise SystemExit(0)
 
 dates_sorted = sorted(totals_by_date.keys())
@@ -150,4 +191,4 @@ for date_str in dates_sorted:
     written += 1
 
 print(f"Wrote/updated {written} day(s) into 'overviewData' (from {dates_sorted[0]} to {dates_sorted[-1]}).")
-print("Overview data aggregation completed (filtered to token list, zero-filled, int-if-whole).")
+print("Overview data aggregation completed.")

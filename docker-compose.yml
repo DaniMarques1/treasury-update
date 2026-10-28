@@ -1,11 +1,24 @@
 services:
   run:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: dataBuild
     command: python -u run.py
     env_file: .env
+    environment:
+      - SSH_HOST=
+      - DB_HOST=pg_microservice_db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-axie_treasury}
+      - DB_USER=${DB_USER:-owner_axie_treasury}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - PYTHONUNBUFFERED=1
     volumes:
       - .:/app
+    networks:
+      - database_net
+      - nginx_net
     logging:
       driver: "json-file"
       options:
@@ -13,48 +26,92 @@ services:
         max-file: "3"
 
   listen:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: listenBlocks
     command: python -u listenNewBlocks.py
     env_file: .env
+    environment:
+      - SSH_HOST=
+      - DB_HOST=pg_microservice_db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-axie_treasury}
+      - DB_USER=${DB_USER:-owner_axie_treasury}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - PYTHONUNBUFFERED=1
     volumes:
       - .:/app
     restart: always
     depends_on:
       - run
+    networks:
+      - database_net
+      - nginx_net
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
 
-  # --- Novo serviço adicionado abaixo ---
   axs_stake:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: axsStake
     command: python -u axsStake.py
     env_file: .env
+    environment:
+      - SSH_HOST=
+      - DB_HOST=pg_microservice_db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-axie_treasury}
+      - DB_USER=${DB_USER:-owner_axie_treasury}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - PYTHONUNBUFFERED=1
     volumes:
       - .:/app
     restart: always
+    networks:
+      - database_net
+      - nginx_net
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
 
-    # --- Novo serviço adicionado abaixo ---
   circulating_supply:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: circulatingSupply
     command: python -u circulatingSupply.py
     env_file: .env
+    environment:
+      - SSH_HOST=
+      - DB_HOST=pg_microservice_db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-axie_treasury}
+      - DB_USER=${DB_USER:-owner_axie_treasury}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - PYTHONUNBUFFERED=1
     volumes:
       - .:/app
     restart: always
+    networks:
+      - database_net
+      - nginx_net
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
 
+networks:
+  database_net:
+    name: postgres_db_backend_network
+    external: true
+  nginx_net:
+    name: sharednet
+    external: true
