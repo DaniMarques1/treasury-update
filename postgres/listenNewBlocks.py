@@ -4,7 +4,10 @@ import time
 from decimal import Decimal
 import requests
 from web3 import Web3
-from web3.middleware import geth_poa_middleware
+try:
+    from web3.middleware import geth_poa_middleware as poa_middleware
+except ImportError:
+    from web3.middleware import ExtraDataToPOAMiddleware as poa_middleware
 from dotenv import load_dotenv
 import psycopg2.extras
 
@@ -89,7 +92,7 @@ def process_and_store_transactions():
     session.hooks["response"].append(response_hook)
 
     w3 = Web3(Web3.HTTPProvider(RONIN_RPC, session=session))
-    w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+    w3.middleware_onion.inject(poa_middleware, layer=0)
 
     if not w3.is_connected():
         raise Exception(f"❌ Failed to connect to Ronin node at {RONIN_RPC}")

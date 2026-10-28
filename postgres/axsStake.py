@@ -4,7 +4,10 @@ import json
 import time
 from datetime import datetime, timezone
 from web3 import Web3
-from web3.middleware import geth_poa_middleware
+try:
+    from web3.middleware import geth_poa_middleware as poa_middleware
+except ImportError:
+    from web3.middleware import ExtraDataToPOAMiddleware as poa_middleware
 from dotenv import load_dotenv
 
 if hasattr(sys.stdout, 'reconfigure'):
@@ -22,7 +25,7 @@ STAKING_POOL = "0x05b0bb3C1c320b280501b86706c3551995bc8571"
 INTERVALO_SEGUNDOS = (59 * 60) + 55
 
 w3 = Web3(Web3.HTTPProvider(RPC_URL))
-w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+w3.middleware_onion.inject(poa_middleware, layer=0)
 
 MIN_ABI = [
     {"constant": True, "inputs": [{"name": "_owner", "type": "address"}], "name": "balanceOf",
